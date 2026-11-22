@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Farbenfuchs Kamera</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Fuchs-Kamera">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+  :root{--fg:#fff;--bg:#000;--panel:rgba(20,20,20,.72);--accent:#ff8a2a}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.3 -apple-system,system-ui,sans-serif;overflow:hidden;touch-action:none}
+  canvas{position:fixed;inset:0;width:100vw;height:100dvh;display:block}
+  video{display:none}
+  .bar{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));background:var(--panel);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-radius:18px;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+  .row{display:flex;gap:8px;align-items:center}
+  .seg{display:flex;flex:1;background:rgba(255,255,255,.1);border-radius:10px;padding:3px}
+  .seg button{flex:1;border:0;background:none;color:var(--fg);padding:8px 4px;border-radius:8px;font:inherit;font-weight:600}
+  .seg button[aria-pressed=true]{background:var(--accent);color:#000}
+  input[type=range]{flex:1;accent-color:var(--accent)}
+  .val{min-width:3.2em;text-align:right;font-variant-numeric:tabular-nums}
+  .icon{border:0;background:rgba(255,255,255,.12);color:var(--fg);width:42px;height:42px;border-radius:50%;font-size:19px;flex:none}
+  .tag{position:fixed;top:calc(10px + env(safe-area-inset-top));padding:4px 10px;border-radius:8px;background:var(--panel);font-size:13px;font-weight:600;pointer-events:none}
+  #tagL{left:10px} #tagR{right:10px}
+  #start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center;background:#111}
+  #start button{border:0;background:var(--accent);color:#000;font:inherit;font-weight:700;font-size:18px;padding:14px 28px;border-radius:14px}
+  #start p{max-width:28em;opacity:.8;margin:0}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<video id="v" playsinline muted autoplay></video>
+<canvas id="c"></canvas>
+<div class="tag" id="tagL" hidden>Original</div>
+<div class="tag" id="tagR" hidden>Simulation</div>
+
+<div id="start">
+  <h1 style="margin:0">🦊 Fuchs-Kamera</h1>
+  <p>Zeigt das Kamerabild so, wie Menschen mit Grün-Schwäche (Deuteranomalie) oder Grün-Blindheit (Deuteranopie) es ungefähr sehen.</p>
+  <button id="go">Kamera starten</button>
+  <p id="err" style="color:#ff8080"></p>
+</div>
+
+<div class="bar" id="bar" hidden>
+  <div class="row">
+    <div class="seg" id="mode">
+      <button data-m="anomalie" aria-pressed="true">Deuteranomalie</button>
+      <button data-m="anopie" aria-pressed="false">Deuteranopie</button>
+    </div>
+  </div>
+  <div class="row" id="sevRow">
+    <span>Stärke</span>
+    <input type="range" id="sev" min="0.1" max="0.9" step="0.05" value="0.6">
+    <span class="val" id="sevV">60 %</span>
+  </div>
+  <div class="row">
+    <div class="seg" id="view">
+      <button data-v="sim" aria-pressed="true">Filter</button>
+      <button data-v="split" aria-pressed="false">Geteilt</button>
+      <button data-v="orig" aria-pressed="false">Original</button>
+    </div>
+    <button class="icon" id="flip" title="Kamera wechseln">⟲</button>
+    <button class="icon" id="freeze" title="Bild anhalten">⏸</button>
+  </div>
+</div>
+
+<script>
+/* Machado, Oliveira & Fernandes (2009), Deuteranomalie, Schweregrad 0.0–1.0 in 0.1-Schritten, lineares RGB */
+var DEUT=[
+ [1,0,0,0,1,0,0,0,1],
+ [0.866435,0.177704,-0.044139,0.049567,0.939063,0.011370,-0.003453,0.007233,0.996220],
+ [0.760729,0.319078,-0.079807,0.090568,0.889315,0.020117,-0.006027,0.013325,0.992702],
+ [0.675425,0.433850,-0.109275,0.125303,0.847755,0.026942,-0.007950,0.018572,0.989378],
+ [0.605511,0.528560,-0.134071,0.155318,0.812366,0.032316,-0.009376,0.023176,0.986200],
+ [0.547494,0.607765,-0.155259,0.181692,0.781742,0.036566,-0.010410,0.027275,0.983136],
+ [0.498864,0.674741,-0.173604,0.205199,0.754872,0.039929,-0.011131,0.030969,0.980162],
+ [0.457771,0.731899,-0.189670,0.226409,0.731012,0.042579,-0.011595,0.034333,0.977261],
+ [0.422823,0.781057,-0.203881,0.245752,0.709602,0.044646,-0.011843,0.037423,0.974421],
+ [0.392952,0.823610,-0.216562,0.263559,0.690210,0.046232,-0.011910,0.040281,0.971630],
+ [0.367322,0.860646,-0.227968,0.280085,0.672501,0.047413,-0.011820,0.042940,0.968881]
+];
+function matFor(s){var x=Math.max(0,Math.min(1,s))*10,i=Math.min(9,Math.floor(x)),t=x-i,a=DEUT[i],b=DEUT[i+1],m=[];for(var k=0;k<9;k++)m[k]=a[k]+(b[k]-a[k])*t;return m;}
+
+var state={mode:'anomalie',sev:0.6,view:'sim',facing:'environment',frozen:false};
+try{var saved=JSON.parse(localStorage.getItem('fuchsKamera')||'{}');Object.assign(state,saved,{frozen:false});}catch(e){}
+function save(){try{localStorage.setItem('fuchsKamera',JSON.stringify({mode:state.mode,sev:state.sev,view:state.view,facing:state.facing}));}catch(e){}}
+
+var video=document.getElementById('v'),canvas=document.getElementById('c');
+var gl=canvas.getContext('webgl',{preserveDrawingBuffer:false});
+var VS='attribute vec2 p;varying vec2 uv;uniform vec2 sc;uniform float mir;void main(){vec2 q=p*0.5+0.5;uv=vec2(mir>0.5?1.0-q.x:q.x,1.0-q.y);uv=(uv-0.5)*sc+0.5;gl_Position=vec4(p,0,1);}';
+var FS='precision mediump float;varying vec2 uv;uniform sampler2D tex;uniform mat3 M;uniform float split;uniform float mode;'+
+ 'vec3 toLin(vec3 c){return mix(c/12.92,pow((c+0.055)/1.055,vec3(2.4)),step(0.04045,c));}'+
+ 'vec3 toSrgb(vec3 c){c=clamp(c,0.0,1.0);return mix(c*12.92,1.055*pow(c,vec3(1.0/2.4))-0.055,step(0.0031308,c));}'+
+ 'void main(){vec3 c=texture2D(tex,uv).rgb;float x=gl_FragCoord.x;'+
+ 'bool sim=mode>1.5?false:(mode>0.5?true:(x>split));'+
+ 'vec3 o=sim?toSrgb(toLin(c)*M):c;'+
+ 'if(mode<0.5&&abs(x-split)<1.5)o=vec3(1.0);gl_FragColor=vec4(o,1);}';
+function sh(t,s){var o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))throw gl.getShaderInfoLog(o);return o;}
+var prog=gl.createProgram();gl.attachShader(prog,sh(gl.VERTEX_SHADER,VS));gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(prog);gl.useProgram(prog);
+var buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+var pl=gl.getAttribLocation(prog,'p');gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,2,gl.FLOAT,false,0,0);
+var tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);
+[gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T].forEach(function(k){gl.texParameteri(gl.TEXTURE_2D,k,gl.CLAMP_TO_EDGE);});
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+var U={};['M','split','mode','sc','mir'].forEach(function(n){U[n]=gl.getUniformLocation(prog,n);});
+var splitFrac=0.5;
+
+function resize(){var d=window.devicePixelRatio||1,w=Math.round(innerWidth*d),h=Math.round(innerHeight*d);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}}
+function draw(){
+  requestAnimationFrame(draw);
+  if(video.readyState<2)return;
+  resize();gl.viewport(0,0,canvas.width,canvas.height);
+  if(!state.frozen)gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,video);
+  /* "cover": Bild füllt den Schirm, Überstand wird abgeschnitten */
+  var va=video.videoWidth/video.videoHeight,ca=canvas.width/canvas.height,sx=1,sy=1;
+  if(va>ca)sx=ca/va;else sy=va/ca;
+  gl.uniform2f(U.sc,sx,sy);gl.uniform1f(U.mir,state.facing==='user'?1:0);
+  gl.uniformMatrix3fv(U.M,false,matFor(state.mode==='anopie'?1:state.sev)); /* Zeilen-Array als column-major: im Shader daher v*M */
+  gl.uniform1f(U.split,splitFrac*canvas.width);
+  gl.uniform1f(U.mode,state.view==='split'?0:state.view==='sim'?1:2);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+}
+
+var stream=null;
+async function startCam(){
+  if(stream)stream.getTracks().forEach(function(t){t.stop();});
+  stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:state.facing},width:{ideal:1920},height:{ideal:1080}}});
+  video.srcObject=stream;await video.play();
+}
+
+/* UI */
+function seg(id,key,attr){var el=document.getElementById(id);el.addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;state[key]=b.dataset[attr];sync();save();});}
+seg('mode','mode','m');seg('view','view','v');
+var sev=document.getElementById('sev'),sevV=document.getElementById('sevV');
+sev.addEventListener('input',function(){state.sev=+sev.value;sync();save();});
+document.getElementById('flip').onclick=function(){state.facing=state.facing==='user'?'environment':'user';save();startCam().catch(showErr);};
+document.getElementById('freeze').onclick=function(){state.frozen=!state.frozen;sync();};
+function sync(){
+  document.querySelectorAll('#mode button').forEach(function(b){b.setAttribute('aria-pressed',b.dataset.m===state.mode);});
+  document.querySelectorAll('#view button').forEach(function(b){b.setAttribute('aria-pressed',b.dataset.v===state.view);});
+  document.getElementById('sevRow').style.opacity=state.mode==='anopie'?.35:1;sev.disabled=state.mode==='anopie';
+  sev.value=state.sev;sevV.textContent=Math.round(state.sev*100)+' %';
+  document.getElementById('freeze').textContent=state.frozen?'▶':'⏸';
+  var sp=state.view==='split';document.getElementById('tagL').hidden=!sp;document.getElementById('tagR').hidden=!sp;
+}
+/* Trennlinie im geteilten Modus verschieben */
+canvas.addEventListener('pointerdown',moveSplit);canvas.addEventListener('pointermove',function(e){if(e.buttons||e.pointerType==='touch')moveSplit(e);});
+function moveSplit(e){if(state.view==='split')splitFrac=Math.max(0,Math.min(1,e.clientX/innerWidth));}
+
+function showErr(e){document.getElementById('start').hidden=false;document.getElementById('bar').hidden=true;
+  document.getElementById('err').textContent=(window.isSecureContext?'':'Kamera braucht HTTPS. ')+'Kamera nicht verfügbar: '+(e&&e.message||e);}
+document.getElementById('go').onclick=function(){
+  startCam().then(function(){document.getElementById('start').hidden=true;document.getElementById('bar').hidden=false;sync();}).catch(showErr);
+};
+sync();draw();
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(function(){});
+</script>
+</body>
+</html>
